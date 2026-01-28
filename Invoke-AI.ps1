@@ -324,5 +324,3 @@ function Invoke-AI {
         }
     }
 }
-
-# Function is ready to use
