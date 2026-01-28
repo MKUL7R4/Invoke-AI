@@ -41,18 +41,25 @@ function Invoke-AI {
     
     .EXAMPLE
         Invoke-AI -Provider Google -Prompt "Write a Python function" -Model "gemini-pro" -Temperature 0.3
+    
+    .EXAMPLE
+        "Get-Process | Where-Object CPU -gt 100" | Invoke-AI -Provider Google -ResponseOnly -SystemPrompt "Convert this PowerShell command to a one-liner"
+    
+    .EXAMPLE
+        $prompts = @("What is PowerShell?", "Explain functions", "How to use modules?")
+        $prompts | Invoke-AI -Provider Google -ResponseOnly
     #>
     
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
         [ValidateSet("OpenAI", "Anthropic", "Google", "Azure", "Cohere", "HuggingFace")]
         [string]$Provider,
         
         [Parameter(Mandatory = $false)]
         [string]$ApiKey,
         
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory = $true, ValueFromPipelineByPropertyName = $true)]
         [string]$Prompt,
         
         [Parameter(Mandatory = $false)]
@@ -81,247 +88,292 @@ function Invoke-AI {
         [switch]$ResponseOnly
     )
     
-    # Error handling
-    $ErrorActionPreference = "Stop"
-    
-    try {
-        # Load configuration file if provided
-        if ($ConfigFile -and (Test-Path $ConfigFile)) {
-            $config = Get-Content $ConfigFile | ConvertFrom-Json
-            if (-not $ApiKey -and $config.$Provider.ApiKey) {
-                $ApiKey = $config.$Provider.ApiKey
-            }
-            if (-not $Endpoint -and $config.$Provider.Endpoint) {
-                $Endpoint = $config.$Provider.Endpoint
-            }
-            if (-not $Model -and $config.$Provider.Model) {
-                $Model = $config.$Provider.Model
-            }
-        }
-        
-        # Get API key from environment variable if not provided
-        if (-not $ApiKey) {
-            $envVar = switch ($Provider) {
-                "OpenAI" { "OPENAI_API_KEY" }
-                "Anthropic" { "ANTHROPIC_API_KEY" }
-                "Google" { "GOOGLE_AI_API_KEY" }
-                "Azure" { "AZURE_OPENAI_API_KEY" }
-                "Cohere" { "COHERE_API_KEY" }
-                "HuggingFace" { "HUGGINGFACE_API_KEY" }
-            }
-            $ApiKey = [Environment]::GetEnvironmentVariable($envVar)
-        }
-        
-        if (-not $ApiKey) {
-            throw "API key not provided. Use -ApiKey parameter, set environment variable, or include in config file."
-        }
-        
-        # Set default models if not specified
-        if (-not $Model) {
-            $Model = switch ($Provider) {
-                "OpenAI" { "gpt-3.5-turbo" }
-                "Anthropic" { "claude-3-sonnet-20240229" }
-                "Google" { "gemini-2.5-flash" }
-                "Azure" { "gpt-35-turbo" }
-                "Cohere" { "command" }
-                "HuggingFace" { "microsoft/DialoGPT-medium" }
-            }
-        }
-        
-        # Set default endpoints if not specified
-        if (-not $Endpoint) {
-            $Endpoint = switch ($Provider) {
-                "OpenAI" { "https://api.openai.com/v1/chat/completions" }
-                "Anthropic" { "https://api.anthropic.com/v1/messages" }
-                "Google" { "https://generativelanguage.googleapis.com/v1/models/$($Model):generateContent" }
-                "Azure" { throw "Azure requires custom endpoint. Use -Endpoint parameter." }
-                "Cohere" { "https://api.cohere.ai/v1/generate" }
-                "HuggingFace" { "https://api-inference.huggingface.co/models/$Model" }
-            }
-        }
-        
-        # Build request body based on provider
-        $body = switch ($Provider) {
-            "OpenAI" {
-                $messages = @()
-                if ($SystemPrompt) {
-                    $messages += @{ role = "system"; content = $SystemPrompt }
-                }
-                $messages += @{ role = "user"; content = $Prompt }
-                
-                @{
-                    model       = $Model
-                    messages    = $messages
-                    max_tokens  = $MaxTokens
-                    temperature = $Temperature
-                } | ConvertTo-Json -Depth 10
-            }
-            
-            "Anthropic" {
-                $messages = @()
-                if ($SystemPrompt) {
-                    $messages += @{ role = "user"; content = $SystemPrompt }
-                    $messages += @{ role = "assistant"; content = "Understood. I'll follow these instructions." }
-                }
-                $messages += @{ role = "user"; content = $Prompt }
-                
-                @{
-                    model       = $Model
-                    messages    = $messages
-                    max_tokens  = $MaxTokens
-                    temperature = $Temperature
-                } | ConvertTo-Json -Depth 10
-            }
-            
-            "Google" {
-                $contents = @()
-                if ($SystemPrompt) {
-                    $contents += @{ role = "user"; parts = @{ text = $SystemPrompt } }
-                    $contents += @{ role = "model"; parts = @{ text = "Understood. I'll follow these instructions." } }
-                }
-                $contents += @{ role = "user"; parts = @{ text = $Prompt } }
-                
-                @{
-                    contents         = $contents
-                    generationConfig = @{
-                        maxOutputTokens = $MaxTokens
-                        temperature     = $Temperature
-                    }
-                } | ConvertTo-Json -Depth 10
-            }
-            
-            "Azure" {
-                $messages = @()
-                if ($SystemPrompt) {
-                    $messages += @{ role = "system"; content = $SystemPrompt }
-                }
-                $messages += @{ role = "user"; content = $Prompt }
-                
-                @{
-                    messages    = $messages
-                    max_tokens  = $MaxTokens
-                    temperature = $Temperature
-                } | ConvertTo-Json -Depth 10
-            }
-            
-            "Cohere" {
-                @{
-                    model       = $Model
-                    prompt      = $Prompt
-                    max_tokens  = $MaxTokens
-                    temperature = $Temperature
-                } | ConvertTo-Json -Depth 10
-            }
-            
-            "HuggingFace" {
-                @{
-                    inputs     = $Prompt
-                    parameters = @{
-                        max_new_tokens = $MaxTokens
-                        temperature    = $Temperature
-                    }
-                } | ConvertTo-Json -Depth 10
-            }
-        }
-        
-        # Set headers based on provider
-        $headers = switch ($Provider) {
-            "OpenAI" {
-                @{
-                    "Content-Type"  = "application/json"
-                    "Authorization" = "Bearer $ApiKey"
-                }
-            }
-            
-            "Anthropic" {
-                @{
-                    "Content-Type"      = "application/json"
-                    "x-api-key"         = $ApiKey
-                    "anthropic-version" = "2023-06-01"
-                }
-            }
-            
-            "Google" {
-                @{
-                    "Content-Type" = "application/json"
-                }
-            }
-            
-            "Azure" {
-                @{
-                    "Content-Type" = "application/json"
-                    "api-key"      = $ApiKey
-                }
-            }
-            
-            "Cohere" {
-                @{
-                    "Content-Type"  = "application/json"
-                    "Authorization" = "Bearer $ApiKey"
-                }
-            }
-            
-            "HuggingFace" {
-                @{
-                    "Content-Type"  = "application/json"
-                    "Authorization" = "Bearer $ApiKey"
-                }
-            }
-        }
-        
-        # Add API key to URL for Google
-        if ($Provider -eq "Google") {
-            $Endpoint += "?key=$ApiKey"
-        }
-        
-        # Make the API call
-        Write-Verbose "Calling $Provider API at $Endpoint"
-        $response = Invoke-RestMethod -Uri $Endpoint -Method Post -Headers $headers -Body $body -TimeoutSec 30
-        
-        # Extract response content based on provider
-        $content = switch ($Provider) {
-            "OpenAI" { $response.choices[0].message.content }
-            "Anthropic" { $response.content[0].text }
-            "Google" { $response.candidates[0].content.parts[0].text }
-            "Azure" { $response.choices[0].message.content }
-            "Cohere" { $response.generations[0].text }
-            "HuggingFace" { $response[0].generated_text }
-        }
-        
-        # Return custom object with response
-        $result = [PSCustomObject]@{
-            Provider   = $Provider
-            Model      = $Model
-            Prompt     = $Prompt
-            Response   = $content.Trim()
-            TokensUsed = if ($response.usage) { $response.usage.total_tokens } else { $null }
-            Timestamp  = Get-Date
-        }
-        
-        if ($ResponseOnly) {
-            return $content.Trim()
-        }
-        elseif ($FullResponse) {
-            return $result | Format-List -Property *
-        }
-        else {
-            # Default to Format-List for better readability
-            return $result | Format-List -Property *
-        }
-        
+    begin {
+        # Initialize variables for pipeline processing
+        $allResults = @()
     }
-    catch {
-        $errorMessage = "Error calling $Provider API: $($_.Exception.Message)"
-        Write-Error $errorMessage
+    
+    process {
+        # Error handling
+        $ErrorActionPreference = "Stop"
         
-        # Return error object
-        return [PSCustomObject]@{
-            Provider  = $Provider
-            Model     = $Model
-            Prompt    = $Prompt
-            Response  = $null
-            Error     = $errorMessage
-            Timestamp = Get-Date
+        try {
+            # Load configuration file if provided
+            if ($ConfigFile -and (Test-Path $ConfigFile)) {
+                $config = Get-Content $ConfigFile | ConvertFrom-Json
+                if (-not $ApiKey -and $config.$Provider.ApiKey) {
+                    $ApiKey = $config.$Provider.ApiKey
+                }
+                if (-not $Endpoint -and $config.$Provider.Endpoint) {
+                    $Endpoint = $config.$Provider.Endpoint
+                }
+                if (-not $Model -and $config.$Provider.Model) {
+                    $Model = $config.$Provider.Model
+                }
+            }
+        
+            # Get API key from environment variable if not provided
+            if (-not $ApiKey) {
+                $envVar = switch ($Provider) {
+                    "OpenAI" { "OPENAI_API_KEY" }
+                    "Anthropic" { "ANTHROPIC_API_KEY" }
+                    "Google" { "GOOGLE_AI_API_KEY" }
+                    "Azure" { "AZURE_OPENAI_API_KEY" }
+                    "Cohere" { "COHERE_API_KEY" }
+                    "HuggingFace" { "HUGGINGFACE_API_KEY" }
+                }
+                $ApiKey = [Environment]::GetEnvironmentVariable($envVar)
+            }
+        
+            if (-not $ApiKey) {
+                throw "API key not provided. Use -ApiKey parameter, set environment variable, or include in config file."
+            }
+        
+            # Set default models if not specified
+            if (-not $Model) {
+                $Model = switch ($Provider) {
+                    "OpenAI" { "gpt-3.5-turbo" }
+                    "Anthropic" { "claude-3-sonnet-20240229" }
+                    "Google" { "gemini-2.5-flash" }
+                    "Azure" { "gpt-35-turbo" }
+                    "Cohere" { "command" }
+                    "HuggingFace" { "microsoft/DialoGPT-medium" }
+                }
+            }
+        
+            # Set default endpoints if not specified
+            if (-not $Endpoint) {
+                $Endpoint = switch ($Provider) {
+                    "OpenAI" { "https://api.openai.com/v1/chat/completions" }
+                    "Anthropic" { "https://api.anthropic.com/v1/messages" }
+                    "Google" { "https://generativelanguage.googleapis.com/v1/models/$($Model):generateContent" }
+                    "Azure" { throw "Azure requires custom endpoint. Use -Endpoint parameter." }
+                    "Cohere" { "https://api.cohere.ai/v1/generate" }
+                    "HuggingFace" { "https://api-inference.huggingface.co/models/$Model" }
+                }
+            }
+        
+            # Build request body based on provider
+            $body = switch ($Provider) {
+                "OpenAI" {
+                    $messages = @()
+                    if ($SystemPrompt) {
+                        $messages += @{ role = "system"; content = $SystemPrompt }
+                    }
+                    $messages += @{ role = "user"; content = $Prompt }
+                
+                    @{
+                        model       = $Model
+                        messages    = $messages
+                        max_tokens  = $MaxTokens
+                        temperature = $Temperature
+                    } | ConvertTo-Json -Depth 10
+                }
+            
+                "Anthropic" {
+                    $messages = @()
+                    if ($SystemPrompt) {
+                        $messages += @{ role = "user"; content = $SystemPrompt }
+                        $messages += @{ role = "assistant"; content = "Understood. I'll follow these instructions." }
+                    }
+                    $messages += @{ role = "user"; content = $Prompt }
+                
+                    @{
+                        model       = $Model
+                        messages    = $messages
+                        max_tokens  = $MaxTokens
+                        temperature = $Temperature
+                    } | ConvertTo-Json -Depth 10
+                }
+            
+                "Google" {
+                    $contents = @()
+                    if ($SystemPrompt) {
+                        $contents += @{ role = "user"; parts = @{ text = $SystemPrompt } }
+                        $contents += @{ role = "model"; parts = @{ text = "Understood. I'll follow these instructions." } }
+                    }
+                    $contents += @{ role = "user"; parts = @{ text = $Prompt } }
+                
+                    @{
+                        contents         = $contents
+                        generationConfig = @{
+                            maxOutputTokens = $MaxTokens
+                            temperature     = $Temperature
+                        }
+                    } | ConvertTo-Json -Depth 10
+                }
+            
+                "Azure" {
+                    $messages = @()
+                    if ($SystemPrompt) {
+                        $messages += @{ role = "system"; content = $SystemPrompt }
+                    }
+                    $messages += @{ role = "user"; content = $Prompt }
+                
+                    @{
+                        messages    = $messages
+                        max_tokens  = $MaxTokens
+                        temperature = $Temperature
+                    } | ConvertTo-Json -Depth 10
+                }
+            
+                "Cohere" {
+                    @{
+                        model       = $Model
+                        prompt      = $Prompt
+                        max_tokens  = $MaxTokens
+                        temperature = $Temperature
+                    } | ConvertTo-Json -Depth 10
+                }
+            
+                "HuggingFace" {
+                    @{
+                        inputs     = $Prompt
+                        parameters = @{
+                            max_new_tokens = $MaxTokens
+                            temperature    = $Temperature
+                        }
+                    } | ConvertTo-Json -Depth 10
+                }
+            }
+        
+            # Set headers based on provider
+            $headers = switch ($Provider) {
+                "OpenAI" {
+                    @{
+                        "Content-Type"  = "application/json"
+                        "Authorization" = "Bearer $ApiKey"
+                    }
+                }
+            
+                "Anthropic" {
+                    @{
+                        "Content-Type"      = "application/json"
+                        "x-api-key"         = $ApiKey
+                        "anthropic-version" = "2023-06-01"
+                    }
+                }
+            
+                "Google" {
+                    @{
+                        "Content-Type" = "application/json"
+                    }
+                }
+            
+                "Azure" {
+                    @{
+                        "Content-Type" = "application/json"
+                        "api-key"      = $ApiKey
+                    }
+                }
+            
+                "Cohere" {
+                    @{
+                        "Content-Type"  = "application/json"
+                        "Authorization" = "Bearer $ApiKey"
+                    }
+                }
+            
+                "HuggingFace" {
+                    @{
+                        "Content-Type"  = "application/json"
+                        "Authorization" = "Bearer $ApiKey"
+                    }
+                }
+            }
+        
+            # Add API key to URL for Google
+            if ($Provider -eq "Google") {
+                $Endpoint += "?key=$ApiKey"
+            }
+        
+            # Make the API call
+            Write-Verbose "Calling $Provider API at $Endpoint"
+            $response = Invoke-RestMethod -Uri $Endpoint -Method Post -Headers $headers -Body $body -TimeoutSec 30
+        
+            # Extract response content based on provider
+            $content = switch ($Provider) {
+                "OpenAI" { $response.choices[0].message.content }
+                "Anthropic" { $response.content[0].text }
+                "Google" { $response.candidates[0].content.parts[0].text }
+                "Azure" { $response.choices[0].message.content }
+                "Cohere" { $response.generations[0].text }
+                "HuggingFace" { $response[0].generated_text }
+            }
+        
+            # Return custom object with response
+            $result = [PSCustomObject]@{
+                Provider   = $Provider
+                Model      = $Model
+                Prompt     = $Prompt
+                Response   = $content.Trim()
+                TokensUsed = if ($response.usage) { $response.usage.total_tokens } else { $null }
+                Timestamp  = Get-Date
+            }
+        
+            if ($ResponseOnly) {
+                return $content.Trim()
+            }
+            elseif ($FullResponse) {
+                return $result | Format-List -Property *
+            }
+            else {
+                # Default to return the actual object (not formatted)
+                return $result
+            }
+        
+            # Add to results collection for pipeline processing
+            $allResults += $result
+        
+            # Only return immediately if not processing pipeline (single item)
+            if ($allResults.Count -eq 1) {
+                return $result
+            }
+        
+        }
+        catch {
+            $errorMessage = "Error calling $Provider API: $($_.Exception.Message)"
+            Write-Error $errorMessage
+            
+            # Return error object
+            $errorResult = [PSCustomObject]@{
+                Provider  = $Provider
+                Model     = $Model
+                Prompt    = $Prompt
+                Response  = $null
+                Error     = $errorMessage
+                Timestamp = Get-Date
+            }
+            $allResults += $errorResult
+            if ($allResults.Count -eq 1) {
+                return $errorResult
+            }
+        }
+    }
+    
+    end {
+        # Return all results if processed in batch
+        if ($allResults.Count -gt 1) {
+            return $allResults
         }
     }
 }
+
+### Example usage
+<#
+# Use Invoke-AI for error analysis
+try {
+    # Some failing code
+}
+catch {
+    Write-Error "$_.Exception.Message"
+    $evaluate = Read-Host "Evaluate error with AI? (y/n)"
+    if ($evaluate -eq "y") {
+        $suggestion = Invoke-AI -Provider Google -Prompt "How to fix this PowerShell error: $($_.Exception.Message)" -ResponseOnly
+        Write-Host "AI response: `n$suggestion"
+    }
+    else {
+        Write-Host "Continuing execution..."
+    }
+}
+#>
