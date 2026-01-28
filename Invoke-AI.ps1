@@ -305,7 +305,8 @@ function Invoke-AI {
             return $result | Format-List -Property *
         }
         else {
-            return $result
+            # Default to Format-List for better readability
+            return $result | Format-List -Property *
         }
         
     }
