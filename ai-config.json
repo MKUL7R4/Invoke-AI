@@ -1,0 +1,32 @@
+{
+    "OpenAI": {
+        "ApiKey": "sk-your-openai-api-key-here",
+        "Model": "gpt-4",
+        "Endpoint": "https://api.openai.com/v1/chat/completions"
+    },
+    "Anthropic": {
+        "ApiKey": "sk-ant-your-anthropic-api-key-here",
+        "Model": "claude-3-sonnet-20240229",
+        "Endpoint": "https://api.anthropic.com/v1/messages"
+    },
+    "Google": {
+        "ApiKey": "google-api-key-here",
+        "Model": "gemini-2.5-flash",
+        "Endpoint": ""
+    },
+    "Azure": {
+        "ApiKey": "your-azure-openai-api-key-here",
+        "Model": "gpt-35-turbo",
+        "Endpoint": "https://your-resource.openai.azure.com/openai/deployments/your-deployment/chat/completions?api-version=2023-12-01-preview"
+    },
+    "Cohere": {
+        "ApiKey": "your-cohere-api-key-here",
+        "Model": "command",
+        "Endpoint": "https://api.cohere.ai/v1/generate"
+    },
+    "HuggingFace": {
+        "ApiKey": "hf-your-huggingface-api-key-here",
+        "Model": "microsoft/DialoGPT-medium",
+        "Endpoint": ""
+    }
+}
